@@ -21,6 +21,7 @@ _PY_LIBRARY_LABEL = "pkg"
 _DATA_LABEL = "data"
 _DIST_INFO_LABEL = "dist_info"
 _WHEEL_ENTRY_POINT_PREFIX = "rules_python_wheel_entry_point"
+_NODEPS_LABEL = "no_deps"
 
 _COPY_FILE_TEMPLATE = """\
 copy_file(
@@ -64,8 +65,10 @@ filegroup(
     data = {whl_file_deps},
 )
 
+# The internal normal form for a library has no deps so that we can directly
+# implement groups by freely taking dependencies.
 py_library(
-    name = "{name}",
+    name = "{nodeps_label}",
     srcs = glob(
         ["site-packages/**/*.py"],
         exclude={srcs_exclude},
@@ -75,12 +78,19 @@ py_library(
     ),
     data = {data} + glob(
         ["site-packages/**/*"],
-        exclude={data_exclude},
+        exclude = {data_exclude},
     ),
     # This makes this directory a top-level in the python import
     # search path for anything that depends on this.
     imports = ["site-packages"],
-    deps = {dependencies},
+)
+
+# The public interface library wraps the nodeps library with appropriate
+# dependencies. This wrapper can freely take dependencies on other nodeps
+# libraries as needed.
+py_library(
+    name = "{name}",
+    deps = [":{nodeps_label}"] + {dependencies},
     tags = {tags},
 )
 """
@@ -91,7 +101,8 @@ def generate_whl_library_build_bazel(
         data_exclude,
         tags,
         entry_points,
-        annotation = None):
+        annotation = None,
+        group_deps = []):
     """Generate a BUILD file for an unzipped Wheel
 
     Args:
@@ -152,7 +163,7 @@ def generate_whl_library_build_bazel(
             _data_exclude.append(item)
 
     lib_dependencies = [
-        "@" + repo_prefix + normalize_name(d) + "//:" + _PY_LIBRARY_LABEL
+        "@" + repo_prefix + normalize_name(d) + "//:" + (_PY_LIBRARY_LABEL if d not in group_deps else _NODEPS_LABEL)
         for d in dependencies
     ]
     whl_file_deps = [

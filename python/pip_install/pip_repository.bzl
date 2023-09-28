@@ -391,6 +391,7 @@ def _pip_repository_impl(rctx):
             "@{}//{}:whl".format(rctx.attr.name, p) if rctx.attr.incompatible_generate_aliases else "@{}_{}//:whl".format(rctx.attr.name, p)
             for p in bzl_packages
         ]),
+        "%%ALL_REQUIREMENT_GROUPS%%": _format_dict(_repr_dict(rctx.attr.requirement_groups)),
         "%%ANNOTATIONS%%": _format_dict(_repr_dict(annotations)),
         "%%CONFIG%%": _format_dict(_repr_dict(config)),
         "%%EXTRA_PIP_ARGS%%": json.encode(options),
@@ -480,6 +481,14 @@ python_interpreter. An example value: "@python3_x86_64-unknown-linux-gnu//:pytho
 Prefix for the generated packages will be of the form `@<prefix><sanitized-package-name>//...`
 """,
     ),
+    "requirement_groups": attr.string_dict(
+        default = {}
+        doc = """\
+A mapping of requirements which form dependency cycles into groups.
+
+Groups of packages will be wrapped so that if a dependency is taken on a member of the cycle the rest of the cycle will
+be correctly included as transitive dependencies.
+        """,
     # 600 is documented as default here: https://docs.bazel.build/versions/master/skylark/lib/repository_ctx.html#execute
     "timeout": attr.int(
         default = 600,
@@ -621,6 +630,7 @@ def _whl_library_impl(rctx):
     build_file_contents = generate_whl_library_build_bazel(
         repo_prefix = rctx.attr.repo_prefix,
         dependencies = metadata["deps"],
+        group_deps = rtx.attr.group_deps,
         data_exclude = rctx.attr.pip_data_exclude,
         tags = [
             "pypi_name=" + metadata["name"],
@@ -668,6 +678,10 @@ whl_library_attrs = {
             "See `package_annotation`"
         ),
         allow_files = True,
+    ),
+    "group_deps": attr.string_list(
+        doc = "List of requirements to skip in order to break the cycles within a dependency group.",
+        default = [],
     ),
     "repo": attr.string(
         mandatory = True,
