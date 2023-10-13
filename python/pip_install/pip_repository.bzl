@@ -19,6 +19,7 @@ load("//python:versions.bzl", "WINDOWS_NAME")
 load("//python/pip_install:repositories.bzl", "all_requirements")
 load("//python/pip_install:requirements_parser.bzl", parse_requirements = "parse")
 load("//python/pip_install/private:generate_whl_library_build_bazel.bzl", "generate_whl_library_build_bazel")
+load("//python/pip_install/private:generate_group_library_build_bazel.bzl", "generate_group_library_build_bazel")
 load("//python/pip_install/private:srcs.bzl", "PIP_INSTALL_PY_SRCS")
 load("//python/private:bzlmod_enabled.bzl", "BZLMOD_ENABLED")
 load("//python/private:normalize_name.bzl", "normalize_name")
@@ -281,7 +282,7 @@ def _pip_repository_impl(rctx):
     bzl_packages = sorted([name for name, _ in packages])
 
     imports = [
-        'load("@rules_python//python/pip_install:pip_repository.bzl", "whl_library")',
+        'load("@rules_python//python/pip_install:pip_repository.bzl", "group_library", "whl_library")',
     ]
 
     annotations = {}
@@ -333,6 +334,7 @@ def _pip_repository_impl(rctx):
             "@{}//{}:whl".format(rctx.attr.name, p) if rctx.attr.incompatible_generate_aliases else "@{}_{}//:whl".format(rctx.attr.name, p)
             for p in bzl_packages
         ]),
+        "%%ALL_REQUIREMENT_GROUPS%%": _format_dict(_repr_dict(rctx.attr.requirement_groups)),
         "%%ANNOTATIONS%%": _format_dict(_repr_dict(annotations)),
         "%%CONFIG%%": _format_dict(_repr_dict(config)),
         "%%EXTRA_PIP_ARGS%%": json.encode(options),
@@ -421,6 +423,15 @@ python_interpreter. An example value: "@python3_x86_64-unknown-linux-gnu//:pytho
         doc = """
 Prefix for the generated packages will be of the form `@<prefix><sanitized-package-name>//...`
 """,
+    ),
+    "requirement_groups": attr.string_list_dict(
+        default = {},
+        doc = """\
+A mapping of requirements which form dependency cycles into groups.
+
+Groups of packages will be wrapped so that if a dependency is taken on a member of the cycle the rest of the cycle will
+be correctly included as transitive dependencies.
+        """,
     ),
     # 600 is documented as default here: https://docs.bazel.build/versions/master/skylark/lib/repository_ctx.html#execute
     "timeout": attr.int(
@@ -563,6 +574,8 @@ def _whl_library_impl(rctx):
     build_file_contents = generate_whl_library_build_bazel(
         repo_prefix = rctx.attr.repo_prefix,
         dependencies = metadata["deps"],
+        group_name = rctx.attr.group_name,
+        group_deps = rctx.attr.group_deps,
         data_exclude = rctx.attr.pip_data_exclude,
         tags = [
             "pypi_name=" + metadata["name"],
@@ -610,6 +623,13 @@ whl_library_attrs = {
             "See `package_annotation`"
         ),
         allow_files = True,
+    ),
+    "group_deps": attr.string_list(
+        doc = "List of requirements to skip in order to break the cycles within a dependency group.",
+        default = [],
+    ),
+    "group_name": attr.string(
+        doc = "Name of the group, if any.",
     ),
     "repo": attr.string(
         mandatory = True,
@@ -678,6 +698,29 @@ def package_annotation(
         data_exclude_glob = data_exclude_glob,
         srcs_exclude_glob = srcs_exclude_glob,
     ))
+
+def _group_library_impl(rctx):
+    build_file_contents = generate_group_library_build_bazel(
+        repo_prefix = rctx.attr.repo_prefix,
+        groups = rctx.attr.groups,
+    )
+    rctx.file("BUILD.bazel", build_file_contents)
+
+group_library = repository_rule(
+    attrs = {
+        "repo_prefix": attr.string(
+            doc = "Prefix used for the whl_library created components of each group",
+        ),
+        "groups": attr.string_list_dict(
+            doc = "A mapping of group names to requirements within that group.",
+        ),
+    },
+    implementation = _group_library_impl,
+    doc = """
+Create a package containing only wrapper py_library and whl_library rules for implementing dependency groups.
+This is an implementation detail of dependency groups and should not be used alone.
+    """
+)
 
 # pip_repository implementation
 

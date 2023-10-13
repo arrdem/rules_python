@@ -15,12 +15,15 @@
 """Generate the BUILD.bazel contents for a repo defined by a whl_library."""
 
 load("//python/private:normalize_name.bzl", "normalize_name")
-
-_WHEEL_FILE_LABEL = "whl"
-_PY_LIBRARY_LABEL = "pkg"
-_DATA_LABEL = "data"
-_DIST_INFO_LABEL = "dist_info"
-_WHEEL_ENTRY_POINT_PREFIX = "rules_python_wheel_entry_point"
+load("//python/pip_install/private:labels.bzl",
+     "WHEEL_FILE_PUBLIC_LABEL",
+     "WHEEL_FILE_IMPL_LABEL",
+     "PY_LIBRARY_PUBLIC_LABEL",
+     "PY_LIBRARY_IMPL_LABEL",
+     "DATA_LABEL",
+     "DIST_INFO_LABEL",
+     "WHEEL_ENTRY_POINT_PREFIX",
+)
 
 _COPY_FILE_TEMPLATE = """\
 copy_file(
@@ -59,13 +62,15 @@ filegroup(
 )
 
 filegroup(
-    name = "{whl_file_label}",
+    name = "{whl_file_impl_label}",
     srcs = glob(["*.whl"], allow_empty = True),
     data = {whl_file_deps},
 )
 
+# The internal normal form for a library has no deps so that we can directly
+# implement groups by freely taking dependencies.
 py_library(
-    name = "{name}",
+    name = "{py_library_impl_label}",
     srcs = glob(
         ["site-packages/**/*.py"],
         exclude={srcs_exclude},
@@ -75,13 +80,21 @@ py_library(
     ),
     data = {data} + glob(
         ["site-packages/**/*"],
-        exclude={data_exclude},
+        exclude = {data_exclude},
     ),
     # This makes this directory a top-level in the python import
     # search path for anything that depends on this.
     imports = ["site-packages"],
-    deps = {dependencies},
-    tags = {tags},
+)
+
+alias(
+   name = "{py_library_public_label}",
+   actual = "{py_library_actual_label}",
+)
+
+alias(
+   name = "{whl_file_public_label}",
+   actual = "{whl_file_actual_label}",
 )
 """
 
@@ -91,7 +104,9 @@ def generate_whl_library_build_bazel(
         data_exclude,
         tags,
         entry_points,
-        annotation = None):
+        annotation = None,
+        group_name = None,
+        group_deps = []):
     """Generate a BUILD file for an unzipped Wheel
 
     Args:
@@ -116,9 +131,9 @@ def generate_whl_library_build_bazel(
     for entry_point, entry_point_script_name in entry_points.items():
         additional_content.append(
             _generate_entry_point_rule(
-                name = "{}_{}".format(_WHEEL_ENTRY_POINT_PREFIX, entry_point),
+                name = "{}_{}".format(WHEEL_ENTRY_POINT_PREFIX, entry_point),
                 script = entry_point_script_name,
-                pkg = ":" + _PY_LIBRARY_LABEL,
+                pkg = ":" + PY_LIBRARY_PUBLIC_LABEL,
             ),
         )
 
@@ -152,26 +167,32 @@ def generate_whl_library_build_bazel(
             _data_exclude.append(item)
 
     lib_dependencies = [
-        "@" + repo_prefix + normalize_name(d) + "//:" + _PY_LIBRARY_LABEL
+        "@" + repo_prefix + normalize_name(d) + "//:" + PY_LIBRARY_PUBLIC_LABEL
         for d in dependencies
+        if d not in group_deps
     ]
     whl_file_deps = [
-        "@" + repo_prefix + normalize_name(d) + "//:" + _WHEEL_FILE_LABEL
+        "@" + repo_prefix + normalize_name(d) + "//:" + WHEEL_FILE_PUBLIC_LABEL
         for d in dependencies
+        if d not in group_deps
     ]
 
     contents = "\n".join(
         [
             _BUILD_TEMPLATE.format(
-                name = _PY_LIBRARY_LABEL,
+                py_library_public_label = PY_LIBRARY_PUBLIC_LABEL,
+                py_library_impl_label = PY_LIBRARY_IMPL_LABEL,
+                py_library_actual_label = ("@" + repo_prefix + "_groups//:" + normalize_name(group_name) + "_" + PY_LIBRARY_PUBLIC_LABEL) if group_name else PY_LIBRARY_IMPL_LABEL,
                 dependencies = repr(lib_dependencies),
                 data_exclude = repr(_data_exclude),
-                whl_file_label = _WHEEL_FILE_LABEL,
+                whl_file_public_label = WHEEL_FILE_PUBLIC_LABEL,
+                whl_file_impl_label = WHEEL_FILE_IMPL_LABEL,
+                whl_file_actual_label = ("@" + repo_prefix + "_groups" + normalize_name(group_name) + "_" + WHEEL_FILE_PUBLIC_LABEL) if group_name else WHEEL_FILE_IMPL_LABEL,
                 whl_file_deps = repr(whl_file_deps),
                 tags = repr(tags),
-                data_label = _DATA_LABEL,
-                dist_info_label = _DIST_INFO_LABEL,
-                entry_point_prefix = _WHEEL_ENTRY_POINT_PREFIX,
+                data_label = DATA_LABEL,
+                dist_info_label = DIST_INFO_LABEL,
+                entry_point_prefix = WHEEL_ENTRY_POINT_PREFIX,
                 srcs_exclude = repr(srcs_exclude),
                 data = repr(data),
             ),
